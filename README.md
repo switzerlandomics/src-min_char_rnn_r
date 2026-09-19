@@ -7,7 +7,7 @@ Python is the standard language for much of modern AI development, but it is not
 
 The objective is to understand a complete, trainable model, not to reproduce the capabilities of a modern Transformer. The implementation retains Karpathy's core architecture and adds a held-out validation split, readable training logs, generated samples, saved checkpoints and numerical gradient tests.
 
-![Character-level RNN: prediction, training and generation](docs/rnn_model.png)
+![Character-level RNN: prediction, training and generation](docs/rnn_model.svg)
 
 
 ## Quick test

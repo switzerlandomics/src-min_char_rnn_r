@@ -1,22 +1,14 @@
 # min-char-rnn in base R
 
-A small CPU-only educational implementation of Andrej Karpathy's minimal
-character-level vanilla RNN. The training code uses base R matrix operations
-only: no torch, TensorFlow, Keras, Python bridge, GPU code, or automatic
-differentiation.
+A small, CPU-only character-level language model implemented in R, following the mathematics of Andrej Karpathy's [minimal recurrent neural network](https://gist.github.com/karpathy/d4dee566867f8291f086) from 2015 which he discussed [here](https://karpathy.github.io/2015/05/21/rnn-effectiveness/) and [here](https://github.com/karpathy/char-rnn).
 
-The project keeps Karpathy's core mathematics and parameter names:
 
-- `Wxh`: input-to-hidden weights
-- `Whh`: hidden-to-hidden recurrent weights
-- `Why`: hidden-to-output weights
-- `bh`: hidden bias
-- `by`: output bias
+Python is the standard language for much of modern AI development, but it is not required to build a neural network. We work extensively in R, so this project reconstructs the learning algorithm in **base R** rather than using a pretrained model or delegating its calculations to a deep-learning framework. The forward pass, loss, backpropagation through time and parameter updates are implemented explicitly with R matrix operations. No Python bridge, GPU or automatic differentiation is required. `ggplot2` is used only for optional monitoring plots.
 
-It adds deterministic one-based R vocabulary indexing, a numerically stable
-softmax/cross-entropy calculation, a held-out validation split, concise logging,
-timing, periodic samples, checkpoint files, and finite-difference gradient
-tests.
+The objective is to understand a complete, trainable model, not to reproduce the capabilities of a modern Transformer. The implementation retains Karpathy's core architecture and adds a held-out validation split, readable training logs, generated samples, saved checkpoints and numerical gradient tests.
+
+![Character-level RNN: prediction, training and generation](docs/rnn_model.png)
+
 
 ## Quick test
 
@@ -28,114 +20,80 @@ Rscript experiments/run.R --smoke
 Rscript experiments/run.R
 ```
 
-## Project layout
+## How the model learns
 
-| Path | Purpose |
+A character-level language model learns to predict the next character in a text sequence. The text itself supplies the training targets: in `The king`, the character after `T` is `h`, the character after `h` is `e`, and so on.
+
+| Current character | Correct next character |
 |---|---|
-| `R/model.R` | Forward pass, BPTT, clipping, AdaGrad, sampling, gradient checker |
-| `R/data.R` | UTF-8 input, vocabulary, one-based encoding, split, checksum |
-| `R/progress.R` | Logging, elapsed time, ETA, progress bar |
-| `experiments/run.R` | CLI wrapper and complete training experiment |
-| `tests/test_model.R` | Base R tests, including finite-difference gradients |
-| `data/input.txt` | Tiny bundled corpus for smoke tests |
-| `scripts/create_zip.R` | Rebuild the distributable zip |
-| `README.md` | Usage and design notes |
+| `T` | `h` |
+| `h` | `e` |
+| `e` | space |
+| space | `k` |
+| `k` | `i` |
+| `i` | `n` |
+| `n` | `g` |
 
-## Requirements
+The program identifies the distinct characters in the input text, assigns each one a deterministic, **one-based** R index and converts each input character into a one-hot vector. Spaces, punctuation, case and newlines are preserved.
 
-- R with `Rscript` available on the command line
-- Base R and the standard `tools` package
-- CPU only
-- Internet access only if the default Tiny Shakespeare file has not yet been
-  downloaded
-
-No R packages need to be installed.
-
-## Mathematical model
-
-For a one-hot character vector \(x_t\) and previous hidden state \(h_{t-1}\):
+The recurrent network combines the current character with a *hidden state* carrying information from preceding characters. At each step it calculates:
 
 ```text
 h_t = tanh(Wxh x_t + Whh h_(t-1) + bh)
 y_t = Why h_t + by
 p_t = softmax(y_t)
-loss = -sum_t log p_t[target_t]
 ```
 
-Backpropagation through time computes gradients for all five learned parameter
-objects. Each gradient element is clipped to `[-5, 5]`, matching the original
-minimal implementation. Parameters are updated with AdaGrad:
+Here `x_t` is the one-hot input, `h_t` is the new hidden state, and `p_t` gives a probability for every possible next character. The same parameter matrices are reused at every position; only the input and hidden state change.
+
+| Parameter | Role |
+|---|---|
+| `Wxh` | Input-to-hidden weights |
+| `Whh` | Hidden-to-hidden recurrent weights |
+| `Why` | Hidden-to-output weights |
+| `bh`, `by` | Hidden and output biases |
+
+Training penalises the network according to the probability it assigned to the **actual** next character. The loss at one position is `-log(p_t[correct character])`; a higher probability for the correct character gives a lower loss. Backpropagation through time calculates gradients for all five parameter objects, and AdaGrad uses those gradients to update the parameters. For each parameter element, the update has the form:
 
 ```text
 memory = memory + gradient^2
 parameter = parameter - learning_rate * gradient / sqrt(memory + 1e-8)
 ```
 
-R arrays are one-based, so vocabulary indices are `1:vocab_size`. The mapping is
-sorted before training so it is deterministic.
+The reference configuration uses **100 hidden units**, **25-character training windows**, and a learning rate of **0.1**. Gradients are propagated backward through each window and clipped element-wise to `[-5, 5]`. The final hidden state can be carried into the following window, but the gradient calculation stops at the boundary. With a 65-character vocabulary, the network contains **23,165 trainable parameters**.
 
-## Default configuration
+Training, validation and text generation use the same network in different ways. **Training** reads the actual text and updates the parameters. **Validation** reads held-out text and measures its prediction loss without updating the parameters. **Generation** starts from a seed character and repeatedly feeds the model's *own sampled character* back as the next input. See [How validation works](docs/02_validation.md) for a short worked example.
 
-| Setting | Default |
-|---|---:|
-| Hidden size | 100 |
-| Sequence length | 25 |
-| Learning rate | 0.1 |
-| Iterations | 5,000 |
-| Random seed | 42 |
-| Log interval | 100 |
-| Sample interval | 500 |
-| Sample length | 200 |
-| Validation fraction | 0.10 |
-| Validation characters per evaluation | 2,000 |
-| Gradient clipping | `[-5, 5]` |
-| Weight initialisation SD | 0.01 |
+## Requirements and quick start
 
-The default input is `data/tiny_shakespeare.txt`. If it is absent, the runner
-downloads the Tiny Shakespeare corpus from Karpathy's `char-rnn` repository.
-The exact downloaded file is recorded by MD5 checksum in the experiment log and
-metadata.
+You need R with `Rscript` available on the command line. The model and tests use base R and the standard `tools` package; training runs on a CPU. The only optional R package is **`ggplot2` 3.4 or later**, used for plots and the browser-based training monitor:
 
-## Run the tests
+```r
+install.packages("ggplot2")
+```
 
-From the project root:
+From the project root, check the model and run the bundled small-corpus smoke test:
 
 ```sh
 Rscript tests/test_model.R
+Rscript experiments/run.R --smoke --no-plot
 ```
 
-The test suite checks:
-
-1. text encoding and decoding
-2. parameter dimensions
-3. numerical stability of softmax
-4. forward and backward output dimensions
-5. analytical gradients against central finite differences
-6. AdaGrad parameter updates
-7. valid sampling
-8. model and vocabulary save/load round trips
-
-A gradient-check failure exits with a non-zero status.
-
-## Run the bundled smoke test
+The smoke test uses `data/input.txt`, a network with 16 hidden units, 12-character windows and 30 updates. It tests the complete training pipeline without downloading a large corpus. The model tests also check numerical stability, saved-model round trips and analytical gradients against finite differences. If you have installed `ggplot2`, you can additionally check the monitoring code:
 
 ```sh
-Rscript experiments/run.R --smoke
+Rscript tests/test_monitoring.R
 ```
 
-Smoke mode uses `data/input.txt`, a hidden size of 16, sequence length 12, and
-30 updates. It exercises the full pipeline without downloading a dataset.
-
-## Run Tiny Shakespeare
+For a short, plotted experiment on Tiny Shakespeare:
 
 ```sh
-Rscript experiments/run.R
+Rscript experiments/run.R --iterations=5000
 ```
 
-If `data/tiny_shakespeare.txt` is missing, it is downloaded automatically using
-base R's `download.file()`.
+If `data/tiny_shakespeare.txt` is missing, the runner downloads it from Karpathy's [char-rnn repository](https://github.com/karpathy/char-rnn). An internet connection is needed for that first download only. The full corpus is kept locally and excluded from Git; the small smoke-test corpus is included in the repository. Use `--no-plot` for a run without `ggplot2`.
 
-To provide your own corpus:
+To train on your own UTF-8 plain-text file or change the experiment settings:
 
 ```sh
 Rscript experiments/run.R \
@@ -144,283 +102,90 @@ Rscript experiments/run.R \
   --seq-length=25 \
   --lr=0.1 \
   --iterations=5000 \
-  --seed=42 \
-  --log-interval=100 \
-  --sample-interval=500 \
-  --sample-length=200
+  --seed=42
 ```
 
-The input file must be valid UTF-8 plain text. Spaces, punctuation, case, and
-newlines are preserved as learnable characters.
+The `--iterations` argument specifies the **total number of parameter updates**, not the number of passes through the corpus. You can request a longer experiment, for example `--iterations=50000`, but more updates do not guarantee improved validation loss or more coherent generated text.
 
-## Output
+## Monitoring and interpreting a run
 
-Each run creates its own timestamped directory under `output/`:
+Each experiment creates a timestamped directory under `output/`. The console and `experiment.log` report the configuration, training progress, elapsed time, estimated completion time and periodic training and validation losses. `samples.txt` records generated passages at different stages of learning.
 
-```text
-output/20260919_143000_seed42/
-├── experiment.log
-├── metadata.rds
-├── metrics.csv
-├── model.rds
-├── samples.txt
-└── vocab.rds
-```
-
-`experiment.log` records R version, seed, input checksum, configuration, data
-sizes, model size, periodic training and validation loss, progress, ETA, and
-saved paths.
-
-`samples.txt` stores generated text at iteration 0 and each sample interval,
-together with the corresponding validation loss.
-
-`model.rds` and `vocab.rds` can be restored with:
-
-```r
-source("R/model.R")
-source("R/data.R")
-
-model <- load_model("output/.../model.rds")
-vocab <- load_vocab("output/.../vocab.rds")
-```
-
-## Reading the reported losses
-
-Training and validation losses are reported in nats per character. A uniform
-predictor over a vocabulary of size `V` has loss:
-
-```text
-log(V)
-```
-
-The training display uses Karpathy's exponentially smoothed sequence loss,
-divided by sequence length so that it is expressed per character.
-
-Periodic validation uses a fixed prefix of the held-out validation split. This
-keeps validation useful and deterministic without making validation much more
-expensive than training. `--validation-chars=N` controls its size.
-
-## Runtime expectations
-
-Runtime depends strongly on CPU, R build, and BLAS implementation. For a modern
-single-core laptop, sensible planning ranges are:
-
-| Run | Approximate planning range |
-|---|---|
-| Tests | under a few seconds |
-| `--smoke` | a few seconds |
-| 5,000 iterations, hidden size 100 | roughly 1 to 10 minutes |
-| 20,000 iterations, hidden size 100 | roughly 5 to 40 minutes |
-
-These are planning ranges, not benchmarks. Use the live iteration rate and ETA
-printed by the runner as the measurement for your machine.
-
-## Reproducibility
-
-The runner records:
-
-- `R.version.string`
-- RNG kind
-- explicit seed
-- input path
-- MD5 input checksum
-- all experiment settings
-- vocabulary size
-- parameter count
-- initial and final validation loss
-- elapsed time
-
-For the same R version, RNG behaviour, input bytes, seed, and configuration, the
-run is designed to be reproducible. Sampling uses temporary deterministic seeds
-that are restored afterwards, so periodic text generation does not alter model
-training.
-
-## Create a zip
-
-```sh
-Rscript scripts/create_zip.R
-```
-
-This writes `min-char-rnn.zip` next to the project directory. The packaging
-script uses R's `utils::zip()` and therefore expects a system `zip` executable.
-
-Equivalent shell command from the directory containing `min-char-rnn/`:
-
-```sh
-zip -r min-char-rnn.zip min-char-rnn \
-  -x 'min-char-rnn/output/*' \
-     'min-char-rnn/data/tiny_shakespeare.txt'
-```
-
-
----
-
-
-# Monitoring and resumable training
-
-This update adds live learning-curve images and complete resumable checkpoints to
-an existing `min-char-rnn` project. **Keep your existing `R/model.R`, `R/data.R`,
-`R/progress.R`, `tests/test_model.R` and training data**. The update does not
-replace or reimplement the working network mathematics.
-
-## Install
-
-Copy the supplied files into the corresponding paths at your project root.
-`experiments/run.R` replaces the previous runner; the other files are new.
-
-Plotting uses ggplot2 3.4 or later. The neural network is still written in base R.
-
-```r
-install.packages("ggplot2")
-```
-
-If you cannot install ggplot2, add `--no-plot` to run training without graphics.
-
-## Start a run
-
-```sh
-Rscript tests/test_model.R
-Rscript tests/test_monitoring.R
-Rscript experiments/run.R --smoke
-Rscript experiments/run.R --iterations=50000
-```
-
-The 50,000-iteration setting is a **total** training budget, not a recommended
-minimum or an assurance that text quality will improve throughout training.
-The log prints the experiment directory at startup. Open its `training.html`
-file in a browser while training continues. It refreshes every 10 seconds and
-shows the newest `training.png` and `validation_detail.png`. The images are
-updated after each `--plot-interval` checkpoint (default: every 1,000 updates).
-No browser or graphics display is required for training to continue.
-
-To render plots retrospectively:
+With plotting enabled, open the run's `training.html` file in a browser. It refreshes every 10 seconds and shows `training.png` (the full learning curves) and `validation_detail.png` (recent validation measurements). Opening or closing the browser does not control training. To recreate plots from a completed run:
 
 ```sh
 Rscript experiments/plot_results.R output/YOUR_EXPERIMENT_DIRECTORY
 ```
 
-To monitor an experiment started with `--no-plot` using a separate process:
+**Loss is measured in nats per character; lower is better.** A predictor assigning equal probability to all `V` vocabulary characters has loss `log(V)`, or about **4.174** for a vocabulary of 65 characters. The training curve displays exponentially smoothed loss from recent training windows, divided by sequence length.
 
-```sh
-Rscript experiments/plot_results.R output/YOUR_EXPERIMENT_DIRECTORY --watch
-```
+Validation calculates the average next-character loss on a **fixed held-out passage**, starting with a reset hidden state and without changing the model. By default, this is the first **2,000 character transitions** of the validation split, not the whole held-out corpus. Training and validation curves therefore use different samples and smoothing conventions; their difference should not be treated as a precise generalisation-gap estimate. Generated passages are a separate qualitative measure: better next-character prediction does not by itself imply coherent prose.
 
-`--watch` polls the CSV every 10 seconds by default. When monitoring a run
-without a `FINISHED` marker (for example, an old experiment), press Ctrl+C to
-exit the viewer. The viewer **does not** control or stop training.
+The runner also retains the model from the **lowest measured validation loss**. That checkpoint may be more useful for inspection than the model obtained at the final update. The [50,000-update experiment notes](docs/03_interpretation.md) discuss an example in which validation performance improved, deteriorated sharply, recovered and then deteriorated again.
 
-## Stop and resume safely
+## Stop, resume and save results
 
-To request a clean stop, open a second terminal in the project root and create
-an empty marker file inside the active run's output directory:
+For a clean stop, create a `STOP` file in the active run's output directory from another terminal:
 
 ```sh
 touch output/YOUR_EXPERIMENT_DIRECTORY/STOP
 ```
 
-The runner checks for the marker at the next console/validation interval,
-validates and saves the current state, updates plots, then exits. This is not
-an immediate operating-system interrupt. **Do not use Ctrl+C as a substitute**
-for clean stop when you need a recent resumable checkpoint.
-
-Remove the marker and resume to a new *total iteration target*:
+The runner checks for the marker at a monitoring interval, saves its current state and exits. This is not an immediate interrupt. Remove the marker and resume with a new **total** update target:
 
 ```sh
 rm output/YOUR_EXPERIMENT_DIRECTORY/STOP
-Rscript experiments/run.R --resume=output/YOUR_EXPERIMENT_DIRECTORY --iterations=100000
+Rscript experiments/run.R \
+  --resume=output/YOUR_EXPERIMENT_DIRECTORY \
+  --iterations=100000
 ```
 
-On Windows, create or delete the `STOP` file with your file manager or the
-PowerShell commands `New-Item` and `Remove-Item`.
+Resumption requires a `latest_checkpoint.rds` produced by the resumable runner. The input, vocabulary, model dimensions, learning rate and sequence length must remain unchanged. A saved `model.rds` by itself does not contain the complete training state needed to resume.
 
-Changing the input, vocabulary, architecture, learning rate or sequence length
-while resuming is intentionally disallowed. You can change monitoring intervals
-and increase the total iteration target. Resume expects
-`latest_checkpoint.rds`, not the old `model.rds` file, and verifies the input
-file checksum. **Pre-update experiments cannot be resumed**, because their
-saved `model.rds` does not include AdaGrad accumulators, hidden state, cursor or
-RNG state.
+A typical experiment directory contains:
 
-## Output files
+| File | Purpose |
+|---|---|
+| `experiment.log`, `metadata.rds` | Configuration, R version, random seed, corpus checksum and run details |
+| `metrics.csv` | Training and validation measurements, elapsed time and approximate corpus passes |
+| `samples.txt` | Periodically generated text |
+| `best_model.rds` | Model weights at the lowest recorded validation loss |
+| `model.rds` | Model weights at the end of the latest run |
+| `latest_checkpoint.rds` | Full resumable state, including AdaGrad memory, text position, hidden state and RNG state |
+| `vocab.rds` | Saved character vocabulary |
+| `training.png`, `validation_detail.png`, `training.html` | Optional plots and browser monitor |
 
-Each new experiment directory contains:
+To load a saved model and vocabulary in R:
 
-- `metrics.csv`: measured losses, elapsed training seconds and approximate
-  corpus passes; written **during** training at validation intervals.
-- `training.png`: full training and validation learning curves, 10 x 6 inches,
-  120 dpi, ggplot2 `theme_bw()` and legible default-size typography.
-- `validation_detail.png`: final third of validation checkpoints, 10 x 4.9 inches, 120 dpi.
-- `training.html`: lightweight local viewer, reloading every 10 seconds.
-- `best_model.rds`: lowest measured validation loss so far, including iteration 0.
-- `model.rds`: model weights at the end of the latest run.
-- `latest_checkpoint.rds`: complete state for resuming training, including
-  AdaGrad accumulators, text cursor, recurrent state, RNG state and metrics.
-- `vocab.rds`, `samples.txt`, `experiment.log`, `metadata.rds`.
-- `FINISHED`: `completed` or `stopped` after a clean exit.
+```r
+source("R/model.R")
+source("R/data.R")
 
-A training image is a monitor, not a control surface. The `STOP` file is the
-explicit control mechanism. A plot being open or closed has no effect on the
-training process.
+model <- load_model("output/YOUR_EXPERIMENT_DIRECTORY/model.rds")
+vocab <- load_vocab("output/YOUR_EXPERIMENT_DIRECTORY/vocab.rds")
+```
 
-## What the lines mean
+The run records its seed, R environment details, configuration and input checksum so an experiment can be repeated under matching conditions. Output directories and the downloaded Shakespeare corpus are **not committed to Git**. Keep selected figures for publication in `docs/` instead.
 
-Training loss is an exponentially smoothed, recent-mini-sequence estimate.
-Validation loss is measured on the same fixed held-out prefix, from a reset
-hidden state at each evaluation. The default validation window is the **first
-2,000 held-out transitions**, not the complete held-out split. The displayed
-training and validation losses are therefore not identically sampled and their
-gap must be interpreted with care.
+## Repository structure
 
-`epochs` is an *approximate* count of corpus passes: completed iterations times
-sequence length divided by train-set character transitions. The final short
-remainder at the end of each pass is skipped, as in the original loop.
+| Path | Purpose |
+|---|---|
+| `R/model.R` | Network mathematics, gradients, AdaGrad, sampling and gradient checking |
+| `R/data.R` | UTF-8 input, vocabulary, encoding, train/validation split and checksum |
+| `R/progress.R` | Logs, elapsed time and progress reporting |
+| `R/plots.R` | Optional learning curves and browser monitor |
+| `experiments/run.R` | Experiment configuration, training, validation, samples and checkpoints |
+| `experiments/plot_results.R` | Render or watch experiment plots |
+| `tests/` | Model and monitoring tests |
+| `data/input.txt` | Small bundled corpus for smoke tests |
+| `docs/` | Worked explanations and selected figures |
+| `output/` | Local experiment results, excluded from Git |
 
-The light-grey dashed horizontal line is the uniform-character cross-entropy
-baseline, `log(vocabulary size)`. It is not a target the network should be
-expected to reach. The bigram reference is an add-one-smoothed next-character
-model fitted on training text alone; it is logged numerically and is evaluated
-on exactly the same held-out transitions as the RNN.
+## References
 
-An isolated validation increase is normal. Assess the trend over multiple
-checkpoints, compare generated samples using a constant sampling RNG seed, and
-keep the best-validation weights. Improving per-character loss does not by
-itself guarantee long-range coherent prose.
+This project follows the model and training logic of Andrej Karpathy's [*min-char-rnn.py*](https://gist.github.com/karpathy/d4dee566867f8291f086) and his article [*The Unreasonable Effectiveness of Recurrent Neural Networks*](https://karpathy.github.io/2015/05/21/rnn-effectiveness/). The default Tiny Shakespeare corpus is from his [char-rnn repository](https://github.com/karpathy/char-rnn).
 
-## General design
+This is an R implementation of an established vanilla RNN architecture, not a claim of a new model design. The contribution of this learning project is a complete, readable implementation of the network mathematics together with the experiment tools needed to observe and reproduce its behaviour.
 
-Plot rendering failures are logged without aborting the training loop; the metrics
-and resumable checkpoint remain the sources of truth.
-
-The plotting functions accept generic `metrics.csv` columns and metadata; they
-contain no hard-coded dataset name, training duration or output experiment ID.
-The image size provides space for normal-sized type, while restrained colour,
-a light background, minimal gridlines and an explicit best-checkpoint marker
-prioritise information over ornament. All plots can be recreated later from the
-saved files, without retraining.
-
-## Caveats
-
-The integration assumes the existing public functions and return structures
-shown in your supplied `experiments/run.R`: `initialise_model`, `loss_fun`,
-`adagrad_update`, `sequence_loss`, `sample_indices`, `save_model`, `save_vocab`,
-`make_logger`, `format_duration`, `read_text_file`, `build_vocab`, `encode_text`,
-`decode_indices`, `split_sequence`, `input_checksum` and related helpers.
-
-The three original implementation modules were not provided with the runner, so
-this update deliberately preserves them. Run your existing `test_model.R` and
-the short smoke test before beginning a long experiment.
-
-
-
-## Reference
-
-The implementation follows the equations and training logic of Andrej
-Karpathy's `min-char-rnn.py` Gist and the accompanying 2015 article, *The
-Unreasonable Effectiveness of Recurrent Neural Networks*. Karpathy's minimal
-script uses one-hot character inputs, a tanh recurrent state, softmax
-cross-entropy, backpropagation through time, element-wise gradient clipping at
-5, AdaGrad, and periodic autoregressive sampling.
-
-Tiny Shakespeare is the example corpus distributed in Karpathy's `char-rnn`
-repository.
 

@@ -2,6 +2,7 @@
 # macOS
 .DS_Store
 ._*
+/scratch/
 
 # R session and local IDE state
 .Rhistory
@@ -26,6 +27,8 @@
 !/output/.gitkeep
 
 # Temporary files and build artifacts
+temp
+tmp
 /temp/
 /tmp/
 /*.zip
